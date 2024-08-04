@@ -22,12 +22,13 @@ class Radio {
   isPlaying = false;
   nextAudioBuffer = null;
 
-  streamAudio = async () => {
+  streamAudio = async (io) => {
     if (this.currentTrackIndex >= this.audioPaths.length) {
       this.currentTrackIndex = 0;
     }
 
-    const filePath = this.audioPaths[this.currentTrackIndex];
+    const currentTrack = this.audioPaths[this.currentTrackIndex];
+    const filePath = currentTrack.filePath;
     this.currentTrackIndex++;
 
     try {
@@ -41,7 +42,7 @@ class Radio {
 
       // Preload the next audio buffer
       if (this.currentTrackIndex < this.audioPaths.length) {
-        const nextFilePath = this.audioPaths[this.currentTrackIndex];
+        const nextFilePath = this.audioPaths[this.currentTrackIndex].filePath;
         this.fetchAudioStreamFromGitHub(nextFilePath)
           .then((buffer) => {
             this.nextAudioBuffer = buffer;
@@ -51,6 +52,9 @@ class Radio {
           });
       }
 
+      // Notify clients about the now playing track
+      io.emit("nowPlaying", currentTrack);
+
       // Create a readable stream from the audio buffer
       const inputStream = new Readable();
       inputStream._read = () => {};
@@ -59,14 +63,6 @@ class Radio {
 
       // Create a PassThrough stream for FFmpeg output
       const outputStream = new PassThrough();
-
-      const metadata = await parseBuffer(audioBuffer, {
-        mimeType: "audio/mpeg",
-      });
-
-      const inputBitrate = metadata.format.bitrate;
-      const inputDuration = metadata.format.duration;
-      const inputSampleRate = metadata.format.sampleRate;
 
       // Use FFmpeg to convert the bitrate
       ffmpeg(inputStream)
@@ -81,8 +77,8 @@ class Radio {
         .outputOptions([
           `-b:a ${TARGET_BITRATE}k`,
           "-acodec libmp3lame",
-          "-ac 2", 
-          "-ar 44100", 
+          "-ac 2",
+          "-ar 44100",
           "-preset ultrafast",
           "-tune zerolatency",
         ])
@@ -96,7 +92,7 @@ class Radio {
       }
       const convertedBuffer = Buffer.concat(chunks);
 
-      const throttle = new Throttle(TARGET_BITRATE * 1000 / 8); // Convert bitrate from bits/s to bytes/s
+      const throttle = new Throttle((TARGET_BITRATE * 1000) / 8); // Convert bitrate from bits/s to bytes/s
       const readableStream = new Readable();
       readableStream._read = () => {};
       readableStream.push(convertedBuffer);
@@ -109,7 +105,7 @@ class Radio {
         })
         .on("end", () => {
           console.log(`Finished streaming ${filePath}`);
-          this.streamAudio();
+          this.streamAudio(io);
         });
     } catch (error) {
       console.error("Error in streamAudio:", error);
@@ -129,7 +125,6 @@ class Radio {
   };
 
   broadcast = (chunk) => {
-    console.log(`From broadcast: ${chunk.length}, ${this.clients.length}`);
     this.clients.forEach((value) => {
       value.client.write(chunk);
     });
@@ -145,7 +140,7 @@ class Radio {
       });
       this.audioPaths = response.data
         .filter((file) => file.type === "file" && file.name.endsWith(".mp3"))
-        .map((file) => file.path);
+        .map((file) => ({ filePath: file.path, fileName: file.name }));
     } catch (error) {
       console.error("Error fetching audio files from GitHub:", error);
     }
@@ -168,9 +163,9 @@ class Radio {
     }
   };
 
-  start = async () => {
+  start = async (io) => {
     await this.fetchAudioFilesFromGitHub();
-    this.streamAudio();
+    this.streamAudio(io);
   };
 }
 
