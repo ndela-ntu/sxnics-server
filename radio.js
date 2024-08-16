@@ -5,6 +5,7 @@ import { PassThrough } from "stream";
 import Throttle from "throttle";
 import { v4 as uuid } from "uuid";
 import ffmpeg from "fluent-ffmpeg";
+import mongoose from "mongoose";
 import { parseBuffer } from "music-metadata";
 
 dotenv.config();
@@ -12,8 +13,34 @@ dotenv.config();
 const GITHUB_API_URL = "https://api.github.com";
 const { REPO_OWNER, REPO_NAME, GITHUB_TOKEN } = process.env;
 
-const TARGET_BITRATE = 320;
+const TARGET_BITRATE = 128;
 const BUFFER_SIZE = 1024 * 1024;
+
+// Replace with your MongoDB connection string
+const MONGODB_URI =
+  "mongodb+srv://Lindelani:16154430@cluster0.jc55flk.mongodb.net/sxnics?retryWrites=true&w=majority&appName=Cluster0";
+// For a local MongoDB instance
+// or
+// const mongoURI = 'your-mongoDB-URI'; // For a cloud MongoDB instance
+
+mongoose
+  .connect(MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("MongoDB connected"))
+  .catch((error) => console.error("Error connecting to MongoDB:", error));
+
+const trackSchema = new mongoose.Schema({
+  filePath: String,
+  trackName: String,
+  artistName: String,
+  trackStarts: String,
+  trackEnds: String,
+  // Add other fields as necessary
+});
+
+const Track = mongoose.model("Track", trackSchema);
 
 class Radio {
   currentTrackIndex = 0;
@@ -21,6 +48,10 @@ class Radio {
   audioPaths = [];
   isPlaying = false;
   nextAudioBuffer = null;
+
+  switchStream = (io) => {
+    io.emit("switchStream", "scheduleStream");
+  };
 
   streamAudio = async (io) => {
     if (this.currentTrackIndex >= this.audioPaths.length) {
@@ -103,13 +134,44 @@ class Radio {
         .on("data", (chunk) => {
           this.broadcast(chunk);
         })
-        .on("end", () => {
+        .on("end", async () => {
           console.log(`Finished streaming ${filePath}`);
-          this.streamAudio(io);
+          const metadata =await  parseBuffer(this.nextAudioBuffer);
+          const duration = metadata.format.duration;
+
+          const hasSchedule = await checkForScheduledStream(duration);
+
+          if (hasSchedule) {
+            this.switchStream(io);
+          } else {
+            this.streamAudio(io);
+          }
         });
     } catch (error) {
       console.error("Error in streamAudio:", error);
     }
+  };
+
+  checkForScheduledStream = async (duration) => {
+    const tracks = await Track.find();
+
+    const sortedTracks = tracks
+      .filter(
+        (track) =>
+          track.trackStarts !== null &&
+          track.trackEnds !== null &&
+          Number(track.trackStarts) - Date.now() >= 0
+      )
+      .sort((a, b) => Number(a.trackStarts) - Number(b.trackStarts));
+
+    // let toReturn = false;
+    // if (sortedTracks.length > 0) {
+    //   if (Date.now() + duration < sortedTracks.at(0).trackStarts) {
+    //     toReturn = false;
+    //   }else {
+        
+    //   }
+    // }
   };
 
   removeClient(id) {
@@ -131,18 +193,17 @@ class Radio {
   };
 
   fetchAudioFilesFromGitHub = async () => {
-    const url = `${GITHUB_API_URL}/repos/${REPO_OWNER}/${REPO_NAME}/contents/`;
     try {
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `token ${GITHUB_TOKEN}`,
-        },
-      });
-      this.audioPaths = response.data
-        .filter((file) => file.type === "file" && file.name.endsWith(".mp3"))
-        .map((file) => ({ filePath: file.path, fileName: file.name }));
+      const tracks = await Track.find();
+
+      this.audioPaths = tracks
+        .filter((track) => track.trackStarts == null && track.trackEnds == null)
+        .map((track) => ({
+          filePath: track.filePath,
+          fileName: `${track.artistName} - ${track.trackName}.mp3`,
+        }));
     } catch (error) {
-      console.error("Error fetching audio files from GitHub:", error);
+      console.error("Error fetching audio files from MongoDB:", error);
     }
   };
 

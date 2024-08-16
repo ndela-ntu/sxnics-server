@@ -24,17 +24,22 @@ const io = new SocketIOServer(server, {
 app.use(cors());
 
 const radio = new Radio();
+let clientCount = 0;
 
 // Setup Socket.IO connection
 io.on("connection", (socket) => {
   console.log("New client connected");
+  clientCount++;
+  io.emit('listenerCount', clientCount);
   const currentTrack = radio.audioPaths[radio.currentTrackIndex - 1];
 
   socket.emit('nowPlaying', currentTrack);
 
   // Handle disconnection
   socket.on("disconnect", () => {
+    clientCount--;
     console.log("Client disconnected");
+    io.emit('listenerCount', clientCount);
   });
 });
 
