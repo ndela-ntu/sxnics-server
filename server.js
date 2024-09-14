@@ -1,9 +1,9 @@
 import express from "express";
 import dotenv from "dotenv";
-import Radio from "./radio.js";
 import cors from "cors";
 import { Server as SocketIOServer } from "socket.io";
 import http from "http";
+import AudioManager from "./audio_manager.js";
 
 dotenv.config();
 
@@ -23,46 +23,22 @@ const io = new SocketIOServer(server, {
 
 app.use(cors());
 
-const radio = new Radio();
-let clientCount = 0;
+const audioManager = new AudioManager(io);
 
 // Setup Socket.IO connection
 io.on("connection", (socket) => {
-  console.log("New client connected");
-  clientCount++;
-  io.emit('listenerCount', clientCount);
-  const currentTrack = radio.audioPaths[radio.currentTrackIndex - 1];
+  const currentTrack = audioManager.currentTrack;
 
-  socket.emit('nowPlaying', currentTrack);
+  socket.emit("nowPlaying", currentTrack);
 
   // Handle disconnection
   socket.on("disconnect", () => {
-    clientCount--;
     console.log("Client disconnected");
-    io.emit('listenerCount', clientCount);
-  });
-});
-
-app.get("/stream", (req, res) => {
-  const { id, client } = radio.addClient();
-
-  res
-    .set({
-      "Content-Type": "audio/mp3",
-      "Transfer-Encoding": "chunked",
-    })
-    .status(200);
-
-  client.pipe(res);
-
-  req.on("close", () => {
-    console.log("Client removed");
-    radio.removeClient(id);
   });
 });
 
 server.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
-  await radio.start(io);
+  await audioManager.startPlayback();
   console.log("Radio started streaming");
 });
